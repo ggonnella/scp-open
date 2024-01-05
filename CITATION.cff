@@ -1,0 +1,10 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+authors:
+- family-names: "Gonnella"
+  given-names: "Giorgio"
+  orcid: "https://orcid.org/0000-0003-3900-5397"
+title: 'scp-open: open and edit a file on a remote server connected by SSH'
+version: 0.1
+date-released: 2024-01-05
+url: "htts://github.com/ggonnella/scp-open/"

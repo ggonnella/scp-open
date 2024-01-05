@@ -1,0 +1,110 @@
+#!/usr/bin/env python3
+
+"""Open and edit a file on a server connecting by ssh
+
+Usage:
+  scp-open [options] <remote_file> [<editor>]
+
+Options:
+  -h --help          Show this screen.
+  -V --version       Script version
+  -c --copy-back     Copy back to server after editing without asking
+  -b --backup        Create a backup of original file on the server
+                     if copying back the edited file
+"""
+
+from docopt import docopt
+from sh import scp, Command
+from loguru import logger
+import tempfile
+import os
+import subprocess
+import hashlib
+import psutil
+import time
+
+def md5sum(filename):
+    with open(filename, mode='rb') as f:
+        d = hashlib.md5()
+        for buf in iter(lambda: f.read(128), b''):
+            d.update(buf)
+    return d.hexdigest()
+
+def get_pid_of_file(filename):
+    try:
+        output = subprocess.check_output(["lsof", '-t', filename])
+        pids = output.decode('utf-8').split('\n')
+        return pids
+    except subprocess.CalledProcessError:
+        return None
+
+def wait_for_process(pid):
+    try:
+        parent = psutil.Process(pid)
+        logger.debug(f"Waiting for process {parent}")
+        for child in parent.children(recursive=True):
+            child.wait()
+        parent.wait()
+    except psutil.NoSuchProcess:
+        pass
+
+def main(args):
+    remote_file = args['<remote_file>']
+    editor = args['<editor>']
+    if editor is None:
+        editor = "xdg-open"
+    logger.info(f"Opening {remote_file} with {editor}")
+    with tempfile.TemporaryDirectory() as tmpdirname:
+        local_file = os.path.join(tmpdirname, os.path.basename(remote_file))
+        try:
+            scp(remote_file, local_file)
+            logger.info(f"Copied {remote_file} to {local_file}")
+            original_md5 = md5sum(local_file)
+            logger.info(f"Original md5sum: {original_md5}")
+        except Exception as e:
+            logger.error(f"Failed to copy {remote_file}: {e}")
+            return
+
+        try:
+            proc = subprocess.Popen([editor, local_file])
+            time.sleep(2)
+            pids = get_pid_of_file(local_file)
+            if pids:
+                logger.debug(f"Found {len(pids)} pids for {local_file}")
+                for pid in pids:
+                    if pid:
+                        logger.debug(f"Waiting for pid {pid}")
+                        wait_for_process(int(pid))
+            logger.info(f"Opened {local_file} with {editor}")
+        except Exception as e:
+            logger.error(f"Failed to edit {local_file}: {e}")
+            return
+
+        new_md5 = md5sum(local_file)
+
+        if original_md5 == new_md5:
+            logger.info("File not changed, not copying back")
+            return
+
+        logger.info(f"New md5sum: {new_md5}")
+        copy_back = args["--copy-back"]
+        if not copy_back:
+          answer = input("File has changed. Copy back to server? [y/N] ")
+          copy_back = answer.lower() == 'y'
+        if copy_back:
+            try:
+                if args["--backup"]:
+                    backup_file = f"{remote_file}.bak"
+                    logger.info(f"Creating backup {backup_file}")
+                    scp(remote_file, remote_file + "~")
+                scp(local_file, remote_file)
+                logger.info(f"Copied back to {remote_file}")
+            except Exception as e:
+                logger.error(f"Failed to copy back to {remote_file}: {e}")
+        else:
+            logger.info("Not copying back. Changes are lost.")
+
+if __name__ == '__main__':
+    arguments = docopt(__doc__, version="0.1")
+    main(arguments)
+
